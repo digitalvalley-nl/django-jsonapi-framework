@@ -40,15 +40,34 @@ class HasAny:
         return filter
 
 
-class HasOrganization:
-    def __init__(self, field='organization_id'):
+class IsEqual:
+    def __init__(self, field, value):
         self.__field = field
+        self.__value = value
+
+    def check_model(self, model, user):
+        value = getattr(model, self.__field)
+        if value == self.__value:
+            return True
+        return False
+
+    def check_queryset(self, queryset, user):
+        kwargs = {
+            self.__field: self.__value
+        }
+        return Q(**kwargs)
+
+
+class IsEqualToOwn:
+    def __init__(self, field, own_field):
+        self.__field = field
+        self.__own_field = own_field
 
     def check_model(self, model, user):
         if user is None:
             return False
         value = getattr(model, self.__field)
-        if value == user.organization_id:
+        if value == getattr(user, self.__own_field):
             return True
         return False
 
@@ -56,7 +75,46 @@ class HasOrganization:
         if user is None:
             return Q(pk__in=[])
         kwargs = {
-            self.__field: user.organization_id
+            self.__field: getattr(user, self.__own_field)
+        }
+        return Q(**kwargs)
+
+
+class IsOwnOrganization(IsEqualToOwn):
+    def __init__(self, field='organization_id'):
+        super().__init__(field, 'organization_id')
+
+
+class IsNone:
+    def __init__(self, field):
+        self.__field = field
+
+    def check_model(self, model, user):
+        value = getattr(model, self.__field)
+        if value is None:
+            return True
+        return False
+
+    def check_queryset(self, queryset, user):
+        kwargs = {
+            self.__field + '__isnull': True
+        }
+        return Q(**kwargs)
+
+
+class IsNotNone:
+    def __init__(self, field):
+        self.__field = field
+
+    def check_model(self, model, user):
+        value = getattr(model, self.__field)
+        if value is not None:
+            return True
+        return False
+
+    def check_queryset(self, queryset, user):
+        kwargs = {
+            self.__field + '__isnull': False
         }
         return Q(**kwargs)
 
@@ -77,7 +135,28 @@ class HasPermission:
 
 
 class Profile:
-    def __init__(self, condition=None, attributes=None, relationships=None):
+    def __init__(
+        self,
+        condition=None,
+        attributes=None,
+        relationships=None,
+        restrictions=None,
+        show_response=True
+    ):
         self.__condition = condition
         self.attributes = attributes if attributes is not None else []
         self.relationships = relationships if relationships is not None else []
+        self.__restrictions = restrictions
+        self.show_response = show_response
+
+
+class ProfileResolver:
+    def __init__(self, *profiles):
+        if len(profiles) < 2:
+            raise ValueError('ProfileResolver requires at least 2 profiles')
+        self.__profiles = profiles
+
+    def resolve(self, user):
+
+        # TODO: Check the conditions to find a profiles match
+        return self.__profiles[0]

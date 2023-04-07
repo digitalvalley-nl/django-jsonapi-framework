@@ -59,6 +59,10 @@ class ModelAttributeTooShortError(BadRequestError):
     pass
 
 
+class ModelFieldsUniqueTogetherError(BadRequestError):
+    pass
+
+
 class ModelIdDoesNotMatchError(BadRequestError):
     pass
 
@@ -104,5 +108,6 @@ VALIDATION_ERRORS = {
     'blank': ModelAttributeTooShortError,
     'min_length': ModelAttributeTooShortError,
     'max_length': ModelAttributeTooLongError,
-    'invalid': ModelAttributeInvalidError
+    'invalid': ModelAttributeInvalidError,
+    'unique_together': ModelFieldsUniqueTogetherError
 }

@@ -24,6 +24,7 @@ from django_jsonapi_framework.exceptions import (
     RequestMethodNotAllowedError,
     VALIDATION_ERRORS
 )
+from django_jsonapi_framework.permissions import ProfileResolver
 
 # JSON Schema
 import jsonschema
@@ -55,16 +56,23 @@ class JSONAPIView:
 
         # Create the model
         model = self.model()
-        profile = model.JSONAPIMeta.create
-        model.from_jsonapi_resource(model_data, profile)
+        create_profile = model.JSONAPIMeta.create
+        if isinstance(create_profile, ProfileResolver):
+            create_profile = create_profile.resolve(None)
+        model.from_jsonapi_resource(model_data, create_profile)
         self.__validate_model(model)
         model.save()
 
         # Return the model data
-        profile = model.JSONAPIMeta.read
-        return JsonResponse({
-            'data': model.to_jsonapi_resource(profile)
-        })
+        if create_profile.show_response:
+            read_profile = model.JSONAPIMeta.read
+            if isinstance(read_profile, ProfileResolver):
+                read_profile = read_profile.resolve(None)
+            return JsonResponse({
+                'data': model.to_jsonapi_resource(read_profile)
+            })
+        else:
+            return HttpResponse(status=204)
 
     def __delete(self, request, id):
         model = self.__get_model(id)
@@ -86,18 +94,22 @@ class JSONAPIView:
 
     def __get(self, request, id):
         model = self.__get_model(id)
-        profile = model.JSONAPIMeta.read
+        read_profile = model.JSONAPIMeta.read
+        if isinstance(read_profile, ProfileResolver):
+            read_profile = read_profile.resolve(None)
         return JsonResponse({
-            'data': model.to_jsonapi_resource(profile)
+            'data': model.to_jsonapi_resource(read_profile)
         })
 
     def __list(self, request):
         models = self.model.objects.all()
-        profile = self.model.JSONAPIMeta.read
+        read_profile = self.model.JSONAPIMeta.read
+        if isinstance(read_profile, ProfileResolver):
+            read_profile = read_profile.resolve(None)
         return JsonResponse({
             'data': list(
                 map(
-                    lambda model: model.to_jsonapi_resource(profile),
+                    lambda model: model.to_jsonapi_resource(read_profile),
                     models
                 )
             )
@@ -116,16 +128,23 @@ class JSONAPIView:
 
         # Create the model
         model = self.__get_model(id)
-        profile = model.JSONAPIMeta.update
-        model.from_jsonapi_resource(model_data, profile)
+        update_profile = model.JSONAPIMeta.update
+        if isinstance(update_profile, ProfileResolver):
+            update_profile = update_profile.resolve(None)
+        model.from_jsonapi_resource(model_data, update_profile)
         self.__validate_model(model)
         model.save()
 
         # Return the model data
-        profile = model.JSONAPIMeta.read
-        return JsonResponse({
-            'data': model.to_jsonapi_resource(profile)
-        })
+        if update_profile.show_response:
+            read_profile = model.JSONAPIMeta.read
+            if isinstance(read_profile, ProfileResolver):
+                read_profile = read_profile.resolve(None)
+            return JsonResponse({
+                'data': model.to_jsonapi_resource(read_profile)
+            })
+        else:
+            return HttpResponse(status=204)
 
     def __get_model(self, id):
         try:
@@ -178,7 +197,7 @@ class JSONAPIView:
 
             # Convert the error to a bad request error
             meta = {
-                'key': field_name
+                'field': field_name
             }
             if field_error.code == 'blank':
                 meta['min_length'] = 1
@@ -189,4 +208,7 @@ class JSONAPIView:
                 meta['min_length'] = field_error.params['limit_value']
             elif field_error.code == 'max_length':
                 meta['max_length'] = field_error.params['limit_value']
+            elif field_error.code == 'unique_together':
+                del meta['field']
+                meta['fields'] = field_error.params['unique_check']
             raise VALIDATION_ERRORS[field_error.code](meta=meta)

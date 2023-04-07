@@ -12,6 +12,7 @@ from django.db.models import (
     Model,
     OneToOneField,
     SET_NULL,
+    UniqueConstraint,
     UUIDField
 )
 
@@ -24,9 +25,14 @@ from django_jsonapi_framework.exceptions import (
 from django_jsonapi_framework.permissions import (
     HasAll,
     HasAny,
-    HasOrganization,
     HasPermission,
-    Profile
+    IsEqual,
+    IsEqualToOwn,
+    IsNone,
+    IsNotNone,
+    IsOwnOrganization,
+    Profile,
+    ProfileResolver
 )
 from django_jsonapi_framework.utils import (
     camel_case_to_snake_case,
@@ -74,7 +80,8 @@ class JSONAPIModel(Model):
             if relationship_value['data'] is None:
                 setattr(self, relationship_name, None)
             else:
-                relationship_class = self._meta.get_field(relationship_name).related_model
+                relationship_class = \
+                    self._meta.get_field(relationship_name).related_model
                 relationship_instance = relationship_class.objects.get(
                     id=relationship_value['data']['id'])
                 setattr(self, relationship_name, relationship_instance)
@@ -121,7 +128,7 @@ class JSONAPIModel(Model):
         abstract = True
 
 
-class Organization(ModelSignalsTransceiver, JSONAPIModel, UUIDModel):
+class Organization(JSONAPIModel, UUIDModel):
     name = CharField(
         blank=False,
         null=False,
@@ -143,15 +150,21 @@ class Organization(ModelSignalsTransceiver, JSONAPIModel, UUIDModel):
     class JSONAPIMeta:
         resource_name = 'organizations'
         create = Profile(
-            condition=HasPermission('django_jsonapi_framework.organizations.create'),
+            condition=HasPermission(
+                'django_jsonapi_framework.organizations.create_all'
+            ),
             attributes=['name']
         )
         read = Profile(
             condition=HasAny(
-                HasPermission('django_jsonapi_framework.organizations.read_all'),
+                HasPermission(
+                    'django_jsonapi_framework.organizations.read_all'
+                ),
                 HasAll(
-                    HasOrganization('id'),
-                    HasPermission('django_jsonapi_framework.organizations.read_own')
+                    IsOwnOrganization('id'),
+                    HasPermission(
+                        'django_jsonapi_framework.organizations.read_own'
+                    )
                 )
             ),
             attributes=['name'],
@@ -159,20 +172,28 @@ class Organization(ModelSignalsTransceiver, JSONAPIModel, UUIDModel):
         )
         update = Profile(
             condition=HasAny(
-                HasPermission('django_jsonapi_framework.organizations.update_all'),
+                HasPermission(
+                    'django_jsonapi_framework.organizations.update_all'
+                ),
                 HasAll(
-                    HasOrganization('id'),
-                    HasPermission('django_jsonapi_framework.organizations.update_own')
+                    IsOwnOrganization('id'),
+                    HasPermission(
+                        'django_jsonapi_framework.organizations.update_own'
+                    )
                 )
             ),
             attributes=['name']
         )
         delete = Profile(
             condition=HasAny(
-                HasPermission('django_jsonapi_framework.organizations.delete_all'),
+                HasPermission(
+                    'django_jsonapi_framework.organizations.delete_all'
+                ),
                 HasAll(
-                    HasOrganization('id'),
-                    HasPermission('django_jsonapi_framework.organizations.delete_own')
+                    IsOwnOrganization('id'),
+                    HasPermission(
+                        'django_jsonapi_framework.organizations.delete_own'
+                    )
                 )
             )
         )
@@ -235,42 +256,167 @@ class User(ModelSignalsTransceiver, JSONAPIModel, UUIDModel):
 
     class JSONAPIMeta:
         resource_name = 'users'
-        create = Profile(
-            condition=HasPermission('django_jsonapi_framework.organizations.create'),
-            attributes=['email', 'password'],
-            relationships=['organization']
+        create = ProfileResolver(
+            Profile(
+                condition=HasPermission(
+                    'django_jsonapi_framework.users.create_all'
+                ),
+                attributes=['email', 'password'],
+                relationships=['organization'],
+                show_response=False
+            ),
+            Profile(
+                condition=HasPermission(
+                    'django_jsonapi_framework.users.create_own'
+                ),
+                attributes=['email', 'password'],
+                relationships=['organization'],
+                restrictions=[IsNotNone('organization')],
+                show_response=False
+            )
         )
         read = Profile(
             condition=HasAny(
-                HasPermission('django_jsonapi_framework.organizations.read_all'),
+                HasPermission(
+                    'django_jsonapi_framework.users.read_all'
+                ),
                 HasAll(
-                    HasOrganization('id'),
-                    HasPermission('django_jsonapi_framework.organizations.read_own')
+                    IsOwnOrganization(),
+                    HasPermission(
+                        'django_jsonapi_framework.users.read_own'
+                    )
                 )
             ),
             attributes=['email'],
             relationships=['organization']
         )
-        update = Profile(
-            condition=HasAny(
-                HasPermission('django_jsonapi_framework.organizations.update_all'),
-                HasAll(
-                    HasOrganization('id'),
-                    HasPermission('django_jsonapi_framework.organizations.update_own')
-                )
+        update = ProfileResolver(
+            Profile(
+                condition=HasPermission(
+                    'django_jsonapi_framework.users.update_all'
+                ),
+                relationships=['organization']
             ),
-            attributes=['email'],
-            relationships=['organization']
+            Profile(
+                condition=HasAll(
+                    IsOwnOrganization(),
+                    HasPermission(
+                        'django_jsonapi_framework.users.update_own'
+                    )
+                )
+                # TODO: Add fields an organization admin can edit
+            ),
+            Profile(
+                condition=HasAll(
+                    IsEqualToOwn('id', 'id'),
+                    HasPermission(
+                        'django_jsonapi_framework.users.update_self'
+                    )
+                )
+                # TODO: Add fields a regular user can edit
+            )
         )
         delete = Profile(
             condition=HasAny(
-                HasPermission('django_jsonapi_framework.organizations.delete_all'),
+                HasPermission(
+                    'django_jsonapi_framework.users.delete_all'
+                ),
                 HasAll(
-                    HasOrganization('id'),
-                    HasPermission('django_jsonapi_framework.organizations.delete_own')
+                    IsOwnOrganization('id'),
+                    HasPermission(
+                        'django_jsonapi_framework.users.delete_own'
+                    )
+                ),
+                HasAll(
+                    IsOwnOrganization('id'),
+                    HasPermission(
+                        'django_jsonapi_framework.users.delete_self'
+                    )
                 )
             )
         )
 
     class ModelSignalsMeta:
         signals = ['pre_full_clean']
+
+
+class Role(JSONAPIModel, UUIDModel):
+    key = CharField(
+        blank=False,
+        null=False,
+        default=None,
+        max_length=64
+    )
+    organization = ForeignKey(
+        to=Organization,
+        on_delete=CASCADE,
+        blank=True,
+        null=True,
+        default=None,
+        related_name='+'
+    )
+
+    class Meta:
+        db_table = 'django_jsonapi_framework__roles'
+        constraints = [
+            UniqueConstraint(fields=['key', 'organization'], name='unique_key_organization')
+        ]
+
+    class JSONAPIMeta:
+        resource_name = 'roles'
+        create = ProfileResolver(
+            Profile(
+                condition=HasPermission(
+                    'django_jsonapi_framework.roles.create_all'
+                ),
+                attributes=['key'],
+                relationships=['organization']
+            ),
+            Profile(
+                condition=HasPermission(
+                    'django_jsonapi_framework.roles.create_own'
+                ),
+                attributes=['key'],
+                relationships=['organization'],
+                restrictions=[IsNotNone('organization')]
+            )
+        )
+        read = Profile(
+            condition=HasAny(
+                HasPermission('django_jsonapi_framework.roles.read_all'),
+                HasAll(
+                    HasAny(
+                        IsOwnOrganization(),
+                        IsNone('organization_id')
+                    ),
+                    HasPermission('django_jsonapi_framework.roles.read_own')
+                )
+            ),
+            attributes=['key'],
+            relationships=['organization']
+        )
+        update = ProfileResolver(
+            Profile(
+                condition=HasPermission(
+                    'django_jsonapi_framework.roles.update_all'
+                ),
+                attributes=['key'],
+                relationships=['organization']
+            ),
+            Profile(
+                condition=HasAll(
+                    IsOwnOrganization(),
+                    HasPermission('django_jsonapi_framework.roles.update_own')
+                ),
+                attributes=['key']
+            )
+        )
+        delete = Profile(
+            condition=HasAny(
+                HasPermission('django_jsonapi_framework.roles.delete_all'),
+                HasAll(
+                    IsOwnOrganization('id'),
+                    HasPermission('django_jsonapi_framework.roles.delete_own')
+                )
+            )
+        )
