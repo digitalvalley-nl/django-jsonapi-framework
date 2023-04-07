@@ -1,10 +1,12 @@
 # Python Standard Library
+import copy
 import json
+from pathlib import Path
 
 # Django
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxLengthValidator, MinLengthValidator
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.urls import path
 from django.db.models.fields import Field
 
@@ -13,8 +15,12 @@ from django_jsonapi_framework.exceptions import (
     ModelAttributeRequiredError,
     ModelAttributeTooLongError,
     ModelAttributeTooShortError,
+    ModelIdDoesNotMatchError,
+    ModelNotFoundError,
+    ModelTypeInvalidError,
     RequestBodyJsonDecodeError,
     RequestBodyJsonSchemaError,
+    RequestHeaderInvalidError,
     RequestMethodNotAllowedError,
     VALIDATION_ERRORS
 )
@@ -23,60 +29,119 @@ from django_jsonapi_framework.exceptions import (
 import jsonschema
 
 
-class ModelViewSet:
-    actions = []
-    basename = None
-    model = None
+class JSONAPIView:
 
-    __create_schema = {
-        'type': 'object',
-        '$schema': 'https://json-schema.org/draft/2020-12/schema',
-        '$id': 'https://django-jsonapi-framework.org/schemas/create.json',
-        'properties': {
-            'data': {
-                'type': 'object',
-                'properties': {
-                    'type': {
-                        'type': 'string'
-                    },
-                    'attributes': {
-                        'type': 'object',
-                        'patternProperties': {
-                            '.*': {
-                                'type': [
-                                    'boolean',
-                                    'integer',
-                                    'number',
-                                    'null',
-                                    'string'
-                                ]
-                            }
-                        },
-                        'additionalProperties': False
-                    },
-                    'relationships': {
-                        'type': 'object',
-                        'additionalProperties': False
-                    }
-                },
-                'required': ['type'],
-                'additionalProperties': False
-            }
-        },
-        'required': ['data'],
-        'additionalProperties': False
-    }
+    __schemas = {}
+    with open(str(Path(__file__).resolve().parent) + '/schema.json') as file:
+        __schemas['update'] = json.loads(file.read())
+    __schemas['create'] = copy.deepcopy(__schemas['update'])
+    __schemas['create']['definitions']['resource']['required'].remove('id')
+    del __schemas['create']['definitions']['resource']['properties']['id']
 
-    @classmethod
-    def get_urlpatterns(cls):
+    def get_urlpatterns(self):
         return [
-            path('v1/' + cls.basename + '/', cls.dispatch),
-            path('v1/' + cls.basename + '/<id>/', cls.dispatch)
+            path(self.model.JSONAPIMeta.resource_name + '/', self.dispatch),
+            path(self.model.JSONAPIMeta.resource_name + '/<id>/', self.dispatch)
         ]
 
-    @classmethod
-    def __create(cls, request):
+    def __create(self, request):
 
+        # Parse the request
+        self.__validate_request_headers(request)
+        data = self.__parse_request_body(request, 'create')
+        model_data = self.__parse_model_data(data['data'])
+        if model_data['type'] != self.model.__name__:
+            raise ModelTypeInvalidError()
+
+        # Create the model
+        model = self.model()
+        profile = model.JSONAPIMeta.create
+        model.from_jsonapi_resource(model_data, profile)
+        self.__validate_model(model)
+        model.save()
+
+        # Return the model data
+        profile = model.JSONAPIMeta.read
+        return JsonResponse({
+            'data': model.to_jsonapi_resource(profile)
+        })
+
+    def __delete(self, request, id):
+        model = self.__get_model(id)
+        model.delete()
+        return HttpResponse(status=204)
+
+    def dispatch(self, request, id=None):
+        if request.method == 'GET':
+            if id is None:
+                return self.__list(request)
+            return self.__get(request, id)
+        if request.method == 'POST':
+            return self.__create(request)
+        if request.method == 'PATCH':
+            return self.__update(request, id)
+        if request.method == 'DELETE':
+            return self.__delete(request, id)
+        raise RequestMethodNotAllowedError()
+
+    def __get(self, request, id):
+        model = self.__get_model(id)
+        profile = model.JSONAPIMeta.read
+        return JsonResponse({
+            'data': model.to_jsonapi_resource(profile)
+        })
+
+    def __list(self, request):
+        models = self.model.objects.all()
+        profile = self.model.JSONAPIMeta.read
+        return JsonResponse({
+            'data': list(
+                map(
+                    lambda model: model.to_jsonapi_resource(profile),
+                    models
+                )
+            )
+        })
+
+    def __update(self, request, id):
+
+        # Parse the request
+        self.__validate_request_headers(request)
+        data = self.__parse_request_body(request, 'update')
+        model_data = self.__parse_model_data(data['data'])
+        if model_data['type'] != self.model.__name__:
+            raise ModelTypeInvalidError()
+        if model_data['id'] != id:
+            raise ModelIdDoesNotMatchError()
+
+        # Create the model
+        model = self.__get_model(id)
+        profile = model.JSONAPIMeta.update
+        model.from_jsonapi_resource(model_data, profile)
+        self.__validate_model(model)
+        model.save()
+
+        # Return the model data
+        profile = model.JSONAPIMeta.read
+        return JsonResponse({
+            'data': model.to_jsonapi_resource(profile)
+        })
+
+    def __get_model(self, id):
+        try:
+            model = self.model.objects.get(id=id)
+        except self.model.DoesNotExist:
+            raise ModelNotFoundError()
+        return model
+
+    def __validate_request_headers(self, request):
+        if request.headers['Content-Type'] != 'application/vnd.api+json':
+            raise RequestHeaderInvalidError({
+                'key': 'Content-Type',
+                'value': request.headers['Content-Type']
+            })
+
+    def __parse_request_body(self, request, schema):
         # Parse the JSON:API data
         try:
             data = json.loads(request.body.decode('utf-8'))
@@ -85,22 +150,20 @@ class ModelViewSet:
 
         # Validate the JSON:API data
         try:
-            jsonschema.validate(instance=data, schema=cls.__create_schema)
+            jsonschema.validate(instance=data, schema=self.__schemas[schema])
         except jsonschema.exceptions.ValidationError:
             raise RequestBodyJsonSchemaError() # TODO: Give more error details
 
-        # Normalize the JSON:API data
-        model_data = data['data']
+        return data
+
+    def __parse_model_data(self, model_data):
         if 'attributes' not in model_data:
             model_data['attributes'] = {}
         if 'relationships' not in model_data:
             model_data['relationships'] = {}
+        return model_data
 
-        # Create the model
-        model = cls.model()
-        model._jsonapi_from_data(model_data)
-
-        # Validate the model
+    def __validate_model(self, model):
         try:
             model.full_clean()
         except ValidationError as error:
@@ -115,7 +178,7 @@ class ModelViewSet:
 
             # Convert the error to a bad request error
             meta = {
-                'attribute': field_name
+                'key': field_name
             }
             if field_error.code == 'blank':
                 meta['min_length'] = 1
@@ -127,43 +190,3 @@ class ModelViewSet:
             elif field_error.code == 'max_length':
                 meta['max_length'] = field_error.params['limit_value']
             raise VALIDATION_ERRORS[field_error.code](meta=meta)
-
-        # Save the model
-        model.jsonapi_pre_save()
-        model.save()
-        model.jsonapi_post_save()
-
-        # Return the model data
-        return JsonResponse({
-            'data': model._jsonapi_to_data()
-        })
-
-    @classmethod
-    def __delete(cls, request, id):
-        raise RequestMethodNotAllowedError()
-
-    @classmethod
-    def dispatch(cls, request, id=None):
-        if request.method == 'GET':
-            if id is None:
-                return cls.__list(request)
-            return cls.__get(request, id)
-        if request.method == 'POST':
-            return cls.__create(request)
-        if request.method == 'PATCH':
-            return cls.__update(request, id)
-        if request.method == 'DELETE':
-            return cls.__delete(request, id)
-        raise RequestMethodNotAllowedError()
-
-    @classmethod
-    def __get(cls, request, id):
-        raise RequestMethodNotAllowedError()
-
-    @classmethod
-    def __list(cls, request):
-        raise RequestMethodNotAllowedError()
-
-    @classmethod
-    def __update(cls, request, id):
-        raise RequestMethodNotAllowedError()
