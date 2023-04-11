@@ -24,7 +24,8 @@ from django_jsonapi_framework.exceptions import (
     RequestMethodNotAllowedError,
     VALIDATION_ERRORS
 )
-from django_jsonapi_framework.permissions import ProfileResolver
+from django_jsonapi_framework.auth.models import User
+from django_jsonapi_framework.auth.permissions import ProfileResolver
 
 # JSON Schema
 import jsonschema
@@ -60,8 +61,9 @@ class JSONAPIView:
         if isinstance(create_profile, ProfileResolver):
             create_profile = create_profile.resolve(None)
         model.from_jsonapi_resource(model_data, create_profile)
-        self.__validate_model(model)
-        model.save()
+        is_valid = self.__validate_model(model)
+        if is_valid != False:
+            model.save()
 
         # Return the model data
         if create_profile.show_response:
@@ -132,8 +134,9 @@ class JSONAPIView:
         if isinstance(update_profile, ProfileResolver):
             update_profile = update_profile.resolve(None)
         model.from_jsonapi_resource(model_data, update_profile)
-        self.__validate_model(model)
-        model.save()
+        is_valid = self.__validate_model(model)
+        if is_valid != False:
+            model.save()
 
         # Return the model data
         if update_profile.show_response:
@@ -148,7 +151,13 @@ class JSONAPIView:
 
     def __get_model(self, id):
         try:
-            model = self.model.objects.get(id=id)
+            id_field = 'id'
+            if hasattr(self.model.JSONAPIMeta, 'id_field'):
+                id_field = self.model.JSONAPIMeta.id_field
+            kwargs = {
+                id_field: id
+            }
+            model = self.model.objects.get(**kwargs)
         except self.model.DoesNotExist:
             raise ModelNotFoundError()
         return model
@@ -184,31 +193,30 @@ class JSONAPIView:
 
     def __validate_model(self, model):
         try:
-            model.full_clean()
+            return model.full_clean()
         except ValidationError as error:
 
             # Get the field name and error
             field_name = next(iter(error.error_dict))
             field_error = error.error_dict[field_name][0]
 
-            # If the error is not recognized, don't handle it
-            if field_error.code not in VALIDATION_ERRORS:
-                raise error
+            # Convert the error to a bad request error if recognized
+            if field_error.code in VALIDATION_ERRORS:
+                meta = {
+                    'field': field_name
+                }
+                if field_error.code == 'blank':
+                    meta['min_length'] = 1
+                    for validator in model._meta.get_field(field_name).validators:
+                        if isinstance(validator, MinLengthValidator):
+                            meta['min_length'] = validator.limit_value
+                elif field_error.code == 'min_length':
+                    meta['min_length'] = field_error.params['limit_value']
+                elif field_error.code == 'max_length':
+                    meta['max_length'] = field_error.params['limit_value']
+                elif field_error.code == 'unique_together':
+                    del meta['field']
+                    meta['fields'] = field_error.params['unique_check']
+                error = VALIDATION_ERRORS[field_error.code](meta=meta)
 
-            # Convert the error to a bad request error
-            meta = {
-                'field': field_name
-            }
-            if field_error.code == 'blank':
-                meta['min_length'] = 1
-                for validator in model._meta.get_field(field_name).validators:
-                    if isinstance(validator, MinLengthValidator):
-                        meta['min_length'] = validator.limit_value
-            elif field_error.code == 'min_length':
-                meta['min_length'] = field_error.params['limit_value']
-            elif field_error.code == 'max_length':
-                meta['max_length'] = field_error.params['limit_value']
-            elif field_error.code == 'unique_together':
-                del meta['field']
-                meta['fields'] = field_error.params['unique_check']
-            raise VALIDATION_ERRORS[field_error.code](meta=meta)
+            raise error

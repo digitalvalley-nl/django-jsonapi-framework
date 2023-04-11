@@ -139,12 +139,15 @@ class Profile:
         self,
         condition=None,
         attributes=None,
+        attribute_mappings=None,
         relationships=None,
         restrictions=None,
         show_response=True
     ):
         self.__condition = condition
         self.attributes = attributes if attributes is not None else []
+        self.attribute_mappings = \
+            attribute_mappings if attribute_mappings is not None else {}
         self.relationships = relationships if relationships is not None else []
         self.__restrictions = restrictions
         self.show_response = show_response

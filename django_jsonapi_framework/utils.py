@@ -11,3 +11,12 @@ def camel_case_to_snake_case(value):
 def snake_case_to_camel_case(value):
     components = value.split('_')
     return components[0] + ''.join(x.title() for x in components[1:])
+
+
+def get_class_by_fully_qualified_name(fully_qualified_name):
+    parts = fully_qualified_name.split('.')
+    module_path = ".".join(parts[:-1])
+    module = __import__(module_path)
+    for component in parts[1:]:
+        module = getattr(module, component)
+    return module

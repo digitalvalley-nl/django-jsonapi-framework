@@ -109,5 +109,6 @@ VALIDATION_ERRORS = {
     'min_length': ModelAttributeTooShortError,
     'max_length': ModelAttributeTooLongError,
     'invalid': ModelAttributeInvalidError,
+    'unique': ModelAttributeInvalidError,
     'unique_together': ModelFieldsUniqueTogetherError
 }
