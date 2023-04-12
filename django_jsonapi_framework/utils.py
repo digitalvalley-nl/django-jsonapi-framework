@@ -20,3 +20,13 @@ def get_class_by_fully_qualified_name(fully_qualified_name):
     for component in parts[1:]:
         module = getattr(module, component)
     return module
+
+
+def clean_field(self, field_name, field, value):
+    try:
+        field.clean(value, self)
+    except ValidationError as error:
+        error.error_dict = {
+            'field_name': error.error_list
+        }
+        raise error

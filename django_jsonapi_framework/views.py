@@ -24,14 +24,23 @@ from django_jsonapi_framework.exceptions import (
     RequestMethodNotAllowedError,
     VALIDATION_ERRORS
 )
-from django_jsonapi_framework.auth.models import User
-from django_jsonapi_framework.auth.permissions import ProfileResolver
+from django_jsonapi_framework.utils import (
+    camel_case_to_snake_case,
+    snake_case_to_camel_case
+)
 
 # JSON Schema
 import jsonschema
 
 
-class JSONAPIView:
+class JSONAPIModelResource:
+    basename = None
+    model = None
+    id_field = 'id'
+    create_profile = None
+    read_profile = None
+    update_profile = None
+    delete_profile = None
 
     __schemas = {}
     with open(str(Path(__file__).resolve().parent) + '/schema.json') as file:
@@ -40,136 +49,134 @@ class JSONAPIView:
     __schemas['create']['definitions']['resource']['required'].remove('id')
     del __schemas['create']['definitions']['resource']['properties']['id']
 
-    def get_urlpatterns(self):
+    @classmethod
+    def get_urlpatterns(cls):
         return [
-            path(self.model.JSONAPIMeta.resource_name + '/', self.dispatch),
-            path(self.model.JSONAPIMeta.resource_name + '/<id>/', self.dispatch)
+            path(cls.basename + '/', cls.dispatch),
+            path(cls.basename + '/<id>/', cls.dispatch)
         ]
 
-    def __create(self, request):
+    @classmethod
+    def __create(cls, request):
 
         # Parse the request
-        self.__validate_request_headers(request)
-        data = self.__parse_request_body(request, 'create')
-        model_data = self.__parse_model_data(data['data'])
-        if model_data['type'] != self.model.__name__:
+        cls.__validate_request_headers(request)
+        data = cls.__parse_request_body(request, 'create')
+        model_data = cls.__parse_model_data(data['data'])
+        if model_data['type'] != cls.model.__name__:
             raise ModelTypeInvalidError()
 
         # Create the model
-        model = self.model()
-        create_profile = model.JSONAPIMeta.create
-        if isinstance(create_profile, ProfileResolver):
-            create_profile = create_profile.resolve(None)
-        model.from_jsonapi_resource(model_data, create_profile)
-        is_valid = self.__validate_model(model)
+        model = cls.model()
+        create_profile = self.create_profile.resolve(None)
+        cls.populate_model_from_resource(model, data, create_profile)
+        is_valid = cls.__validate_model(model)
         if is_valid != False:
             model.save()
 
         # Return the model data
         if create_profile.show_response:
-            read_profile = model.JSONAPIMeta.read
-            if isinstance(read_profile, ProfileResolver):
-                read_profile = read_profile.resolve(None)
+            read_profile = self.read_profile.resolve(None)
             return JsonResponse({
-                'data': model.to_jsonapi_resource(read_profile)
+                'data': cls.render_model_to_resource(model, read_profile)
             })
         else:
             return HttpResponse(status=204)
 
-    def __delete(self, request, id):
-        model = self.__get_model(id)
+    @classmethod
+    def __delete(cls, request, id):
+        model = cls.__get_model(id)
         model.delete()
         return HttpResponse(status=204)
 
-    def dispatch(self, request, id=None):
+    @classmethod
+    def dispatch(cls, request, id=None):
         if request.method == 'GET':
             if id is None:
-                return self.__list(request)
-            return self.__get(request, id)
+                return cls.__list(request)
+            return cls.__get(request, id)
         if request.method == 'POST':
-            return self.__create(request)
+            return cls.__create(request)
         if request.method == 'PATCH':
-            return self.__update(request, id)
+            return cls.__update(request, id)
         if request.method == 'DELETE':
-            return self.__delete(request, id)
+            return cls.__delete(request, id)
         raise RequestMethodNotAllowedError()
 
-    def __get(self, request, id):
-        model = self.__get_model(id)
-        read_profile = model.JSONAPIMeta.read
-        if isinstance(read_profile, ProfileResolver):
-            read_profile = read_profile.resolve(None)
+    @classmethod
+    def __get(cls, request, id):
+        model = cls.__get_model(id)
+        read_profile = cls.read_profile.resolve(None)
         return JsonResponse({
-            'data': model.to_jsonapi_resource(read_profile)
+            'data': cls.render_model_to_resource(model, read_profile)
         })
 
-    def __list(self, request):
-        models = self.model.objects.all()
-        read_profile = self.model.JSONAPIMeta.read
-        if isinstance(read_profile, ProfileResolver):
-            read_profile = read_profile.resolve(None)
+    @classmethod
+    def __list(cls, request):
+        models = cls.model.objects.all()
+        read_profile = cls.read_profile.resolve(None)
         return JsonResponse({
             'data': list(
                 map(
-                    lambda model: model.to_jsonapi_resource(read_profile),
+                    lambda model: cls.render_model_to_resource(model, read_profile),
                     models
                 )
             )
         })
 
-    def __update(self, request, id):
+    @classmethod
+    def __update(cls, request, id):
 
         # Parse the request
-        self.__validate_request_headers(request)
-        data = self.__parse_request_body(request, 'update')
-        model_data = self.__parse_model_data(data['data'])
-        if model_data['type'] != self.model.__name__:
+        cls.__validate_request_headers(request)
+        data = cls.__parse_request_body(request, 'update')
+        model_data = cls.__parse_model_data(data['data'])
+        if model_data['type'] != cls.model.__name__:
             raise ModelTypeInvalidError()
         if model_data['id'] != id:
             raise ModelIdDoesNotMatchError()
 
         # Create the model
-        model = self.__get_model(id)
-        update_profile = model.JSONAPIMeta.update
-        if isinstance(update_profile, ProfileResolver):
-            update_profile = update_profile.resolve(None)
-        model.from_jsonapi_resource(model_data, update_profile)
-        is_valid = self.__validate_model(model)
+        model = cls.__get_model(id)
+        update_profile = cls.update_profile.resolve(None)
+        cls.populate_model_from_resource(model, model_data, update_profile)
+        is_valid = cls.__validate_model(model)
         if is_valid != False:
             model.save()
 
         # Return the model data
         if update_profile.show_response:
-            read_profile = model.JSONAPIMeta.read
-            if isinstance(read_profile, ProfileResolver):
-                read_profile = read_profile.resolve(None)
+            read_profile = cls.read_profile.resolve(None)
             return JsonResponse({
-                'data': model.to_jsonapi_resource(read_profile)
+                'data': cls.render_model_to_resource(model, read_profile)
             })
         else:
             return HttpResponse(status=204)
 
-    def __get_model(self, id):
+    @classmethod
+    def __get_model(cls, id):
         try:
             id_field = 'id'
-            if hasattr(self.model.JSONAPIMeta, 'id_field'):
-                id_field = self.model.JSONAPIMeta.id_field
+            if hasattr(cls, 'id_field'):
+                id_field = cls.id_field
             kwargs = {
                 id_field: id
             }
-            model = self.model.objects.get(**kwargs)
-        except self.model.DoesNotExist:
+            model = cls.model.objects.get(**kwargs)
+        except cls.model.DoesNotExist:
             raise ModelNotFoundError()
         return model
 
-    def __validate_request_headers(self, request):
+    @classmethod
+    def __validate_request_headers(cls, request):
         if request.headers['Content-Type'] != 'application/vnd.api+json':
             raise RequestHeaderInvalidError({
                 'key': 'Content-Type',
                 'value': request.headers['Content-Type']
             })
 
-    def __parse_request_body(self, request, schema):
+    @classmethod
+    def __parse_request_body(cls, request, schema):
         # Parse the JSON:API data
         try:
             data = json.loads(request.body.decode('utf-8'))
@@ -178,20 +185,22 @@ class JSONAPIView:
 
         # Validate the JSON:API data
         try:
-            jsonschema.validate(instance=data, schema=self.__schemas[schema])
+            jsonschema.validate(instance=data, schema=cls.__schemas[schema])
         except jsonschema.exceptions.ValidationError:
             raise RequestBodyJsonSchemaError() # TODO: Give more error details
 
         return data
 
-    def __parse_model_data(self, model_data):
+    @classmethod
+    def __parse_model_data(cls, model_data):
         if 'attributes' not in model_data:
             model_data['attributes'] = {}
         if 'relationships' not in model_data:
             model_data['relationships'] = {}
         return model_data
 
-    def __validate_model(self, model):
+    @classmethod
+    def __validate_model(cls, model):
         try:
             return model.full_clean()
         except ValidationError as error:
@@ -220,3 +229,64 @@ class JSONAPIView:
                 error = VALIDATION_ERRORS[field_error.code](meta=meta)
 
             raise error
+
+
+    @classmethod
+    def populate_model_from_resource(cls, model, resource, profile):
+        for attribute_name, attribute_value in resource['attributes'].items():
+            attribute_name = camel_case_to_snake_case(attribute_name)
+            if attribute_name not in profile.attributes:
+                raise ModelAttributeNotAllowedError({
+                    'key': attribute_name
+                })
+            if attribute_name in profile.attribute_mappings:
+                attribute_name = profile.attribute_mappings[attribute_name]
+            setattr(model, attribute_name, attribute_value)
+
+        for relationship_name, relationship_value \
+                in resource['relationships'].items():
+            relationship_name = camel_case_to_snake_case(relationship_name)
+            if relationship_name not in profile.relationships:
+                raise ModelRelationshipNotAllowedError({
+                    'key': relationship_name
+                })
+            if relationship_value['data'] is None:
+                setattr(model, relationship_name, None)
+            else:
+                relationship_class = \
+                    model._meta.get_field(relationship_name).related_model
+                relationship_instance = relationship_class.objects.get(
+                    id=relationship_value['data']['id'])
+                setattr(model, relationship_name, relationship_instance)
+
+    @classmethod
+    def render_model_to_resource(cls, model, profile):
+        attributes = {}
+        for attribute_name in profile.attributes:
+            attributes[snake_case_to_camel_case(attribute_name)] = getattr(
+                model, attribute_name)
+
+        relationships = {}
+        for relationship_name in profile.relationships:
+            relationship_value = getattr(model, relationship_name)
+            if relationship_value is None:
+                relationship_data = None
+            else:
+                relationship_data = {
+                    'type': relationship_value.__class__.__name__,
+                    'id': relationship_value.id
+                }
+            relationships[snake_case_to_camel_case(relationship_name)] = {
+                'data': relationship_data
+            }
+
+        resource = {
+            'id': getattr(model, cls.id_field),
+            'type': model.__class__.__name__,
+        }
+        if len(attributes.keys()) > 0:
+            resource['attributes'] = attributes
+        if len(relationships.keys()) > 0:
+            resource['relationships'] = relationships
+
+        return resource

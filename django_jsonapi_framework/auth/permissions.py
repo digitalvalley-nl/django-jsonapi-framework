@@ -61,6 +61,8 @@ class IsEqual:
 class IsEqualToOwn:
     def __init__(self, field, own_field):
         self.__field = field
+        if own_field == 'id':
+            own_field = 'uuid'
         self.__own_field = own_field
 
     def check_model(self, model, user):
@@ -81,8 +83,8 @@ class IsEqualToOwn:
 
 
 class IsOwnOrganization(IsEqualToOwn):
-    def __init__(self, field='organization_id'):
-        super().__init__(field, 'organization_id')
+    def __init__(self):
+        super().__init__('organization_id', 'organization_id')
 
 
 class IsNone:
@@ -134,6 +136,7 @@ class HasPermission:
         return Q(pk__in=[])
 
 
+
 class Profile:
     def __init__(
         self,
@@ -152,6 +155,9 @@ class Profile:
         self.__restrictions = restrictions
         self.show_response = show_response
 
+    def resolve(self, user):
+        return self
+
 
 class ProfileResolver:
     def __init__(self, *profiles):
@@ -160,6 +166,5 @@ class ProfileResolver:
         self.__profiles = profiles
 
     def resolve(self, user):
-
         # TODO: Check the conditions to find a profiles match
         return self.__profiles[0]

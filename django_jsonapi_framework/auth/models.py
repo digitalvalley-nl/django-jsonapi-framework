@@ -2,47 +2,39 @@
 import uuid
 
 # Django
-from django.conf import settings
 from django.contrib.auth.models import User as DjangoUser
-from django.core.exceptions import ValidationError
-from django.core.validators import MinLengthValidator, EmailValidator
+from django.core.validators import MinLengthValidator
 from django.db.models import (
     CASCADE,
+    BooleanField,
     CharField,
     ForeignKey,
     Model,
-    OneToOneField,
     SET_NULL,
-    UniqueConstraint,
     UUIDField
 )
 from django.db.utils import IntegrityError
 
 # Django JSON:API Framework
 from django_jsonapi_framework.exceptions import ModelAttributeRequiredError
-from django_jsonapi_framework.models import (
-    JSONAPIBaseModel,
-    JSONAPIModel
+from django_jsonapi_framework.utils import (
+    get_class_by_fully_qualified_name,
+    clean_field
 )
-from django_jsonapi_framework.auth.permissions import (
-    HasAll,
-    HasAny,
-    HasPermission,
-    IsEqual,
-    IsEqualToOwn,
-    IsNone,
-    IsNotNone,
-    IsOwnOrganization,
-    Profile,
-    ProfileResolver
-)
-from django_jsonapi_framework.utils import get_class_by_fully_qualified_name
+from django_jsonapi_framework.auth.utils import get_auth_email_handler
 
 # Django Model Signals
 from django_model_signals.transceiver import ModelSignalsTransceiver
 
 
-class Organization(JSONAPIModel):
+class Organization(Model):
+    id = UUIDField(
+        blank=False,
+        null=False,
+        default=uuid.uuid4,
+        primary_key=True,
+        editable=False
+    )
     name = CharField(
         blank=False,
         null=False,
@@ -61,60 +53,14 @@ class Organization(JSONAPIModel):
     class Meta:
         db_table = 'django_jsonapi_framework__auth__organizations'
 
-    class JSONAPIMeta:
-        resource_name = 'organizations'
-        create = Profile(
-            condition=HasPermission(
-                'django_jsonapi_framework__auth.organizations.create_all'
-            ),
-            attributes=['name']
-        )
-        read = Profile(
-            condition=HasAny(
-                HasPermission(
-                    'django_jsonapi_framework__auth.organizations.read_all'
-                ),
-                HasAll(
-                    IsOwnOrganization('id'),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.organizations.read_own'
-                    )
-                )
-            ),
-            attributes=['name'],
-            relationships=['owner']
-        )
-        update = Profile(
-            condition=HasAny(
-                HasPermission(
-                    'django_jsonapi_framework__auth.organizations.update_all'
-                ),
-                HasAll(
-                    IsOwnOrganization('id'),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.organizations.update_own'
-                    )
-                )
-            ),
-            attributes=['name']
-        )
-        delete = Profile(
-            condition=HasAny(
-                HasPermission(
-                    'django_jsonapi_framework__auth.organizations.delete_all'
-                ),
-                HasAll(
-                    IsOwnOrganization('id'),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.organizations.delete_own'
-                    )
-                )
-            )
-        )
 
-
-class User(JSONAPIBaseModel, ModelSignalsTransceiver, DjangoUser):
-    uuid = UUIDField(default=uuid.uuid4, editable=False)
+class User(ModelSignalsTransceiver, DjangoUser):
+    uuid = UUIDField(
+        blank=False,
+        null=False,
+        default=uuid.uuid4,
+        editable=False
+    )
     organization = ForeignKey(
         to=Organization,
         on_delete=CASCADE,
@@ -123,24 +69,27 @@ class User(JSONAPIBaseModel, ModelSignalsTransceiver, DjangoUser):
         default=None,
         related_name='+'
     )
-
-    new_password = None
+    is_email_confirmed = BooleanField(
+        blank=False,
+        null=False,
+        default=False
+    )
 
     def pre_full_clean(self, **kwargs):
 
-        # Make sure the username is always the email
+        # Make sure the username is always equal to the email
         self.username = self.email
 
         # Make sure there is a new password or a password
-        if self.new_password is None and len(self.password) == 0:
+        if not hasattr(self, 'raw_password') and len(self.password) == 0:
             raise ModelAttributeRequiredError({
                 'key': 'password'
             })
 
         # If there is a new password, manually validate it and set it as the
         # password
-        if self.new_password is not None:
-            new_password_field = CharField(
+        if hasattr(self, 'raw_password') is not None:
+            raw_password_field = CharField(
                 blank=False,
                 null=False,
                 default=None,
@@ -149,34 +98,42 @@ class User(JSONAPIBaseModel, ModelSignalsTransceiver, DjangoUser):
                     MinLengthValidator(8)
                 ]
             )
-            self.clean_field('password', new_password_field, self.new_password)
-            self.set_password(self.new_password)
+            clean_field('password', raw_password_field, self.raw_password)
+            self.set_password(self.raw_password)
 
-    def post_full_clean_error(self, error, created):
-        field_name = next(iter(error.error_dict))
-        field_error = error.error_dict[field_name][0]
-        if field_name == 'username' and field_error.code == 'unique':
-            auth_email_handler = get_class_by_fully_qualified_name(
-                settings.DJANGO_JSONAPI_FRAMEWORK['AUTH_EMAIL_HANDLER']
-            )
-            auth_email_handler.send_email_already_exists_email(self)
-            return False
+    def post_full_clean_error(self, **kwargs):
+
+        # If validating the user while creating caused a username (email) not
+        # unique error, send an email to the user to notify them that they
+        # already have an account, suppress the error and stop the model from
+        # being persisted.
+        if kwargs['created']:
+            field_name = next(iter(kwargs['error'].error_dict))
+            field_error = kwargs['error'].error_dict[field_name][0]
+            if field_name == 'username' and field_error.code == 'unique':
+                auth_email_handler = get_auth_email_handler()
+                auth_email_handler.send_email_already_exists_email(self)
+                return False
+
         raise error
 
     def post_save(self, **kwargs):
+
+        # If the user was successfully created, send an email confirmation
+        # email.
         if kwargs['created']:
-            auth_email_handler = get_class_by_fully_qualified_name(
-                settings.DJANGO_JSONAPI_FRAMEWORK['AUTH_EMAIL_HANDLER']
-            )
+            auth_email_handler = get_auth_email_handler()
             auth_email_handler.send_email_confirmation_email(self)
 
     def post_save_error(self, error, created):
+
+        # If creating the user caused a username (email) not unique error, send
+        # an email to the user to notify them that they already have an account
+        # and suppress the error.
         if isinstance(error, IntegrityError) \
                 and error.args[0] == 1062 \
                 and 'auth_user.username' in error.args[1]:
-            auth_email_handler = get_class_by_fully_qualified_name(
-                settings.DJANGO_JSONAPI_FRAMEWORK['AUTH_EMAIL_HANDLER']
-            )
+            auth_email_handler = get_auth_email_handler()
             auth_email_handler.send_email_already_exists_email(self)
 
     class Meta:
@@ -189,90 +146,3 @@ class User(JSONAPIBaseModel, ModelSignalsTransceiver, DjangoUser):
             'post_save',
             'post_save_error'
         ]
-
-    class JSONAPIMeta:
-        resource_name = 'users'
-        id_field = 'uuid'
-        create = ProfileResolver(
-            Profile(
-                condition=HasPermission(
-                    'django_jsonapi_framework__auth.users.create_all'
-                ),
-                attributes=['email', 'password'],
-                attribute_mappings={
-                    'password': 'new_password'
-                },
-                relationships=['organization'],
-                show_response=False
-            ),
-            Profile(
-                condition=HasPermission(
-                    'django_jsonapi_framework__auth.users.create_own'
-                ),
-                attributes=['email', 'password'],
-                attribute_mappings={
-                    'password': 'new_password'
-                },
-                relationships=['organization'],
-                show_response=False
-            )
-        )
-        read = Profile(
-            condition=HasAny(
-                HasPermission(
-                    'django_jsonapi_framework__auth.users.read_all'
-                ),
-                HasAll(
-                    IsOwnOrganization(),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.read_own'
-                    )
-                )
-            ),
-            attributes=['email']
-        )
-        update = ProfileResolver(
-            Profile(
-                condition=HasPermission(
-                    'django_jsonapi_framework__auth.users.update_all'
-                ),
-                relationships=['organization']
-            ),
-            Profile(
-                condition=HasAll(
-                    IsOwnOrganization(),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.update_own'
-                    )
-                )
-                # TODO: Add fields an organization admin can edit
-            ),
-            Profile(
-                condition=HasAll(
-                    IsEqualToOwn('id', 'id'),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.update_self'
-                    )
-                )
-                # TODO: Add fields a regular user can edit
-            )
-        )
-        delete = Profile(
-            condition=HasAny(
-                HasPermission(
-                    'django_jsonapi_framework__auth.users.delete_all'
-                ),
-                HasAll(
-                    IsOwnOrganization('id'),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.delete_own'
-                    )
-                ),
-                HasAll(
-                    IsOwnOrganization('id'),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.delete_self'
-                    )
-                )
-            )
-        )
