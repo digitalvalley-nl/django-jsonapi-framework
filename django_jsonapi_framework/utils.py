@@ -1,4 +1,8 @@
+# Python Standard Library
 import re
+
+# Django
+from django.core.exceptions import ValidationError
 
 
 CAMEL_CASE_TO_SNAKE_CASE_REGEX = re.compile(r'(?<!^)(?=[A-Z])')
@@ -8,9 +12,9 @@ def camel_case_to_snake_case(value):
     return CAMEL_CASE_TO_SNAKE_CASE_REGEX.sub('_', value).lower()
 
 
-def clean_field(self, field_name, field, value):
+def clean_field(model, field_name, field, value):
     try:
-        field.clean(value, self)
+        field.clean(value, model)
     except ValidationError as error:
         error.error_dict = {
             'field_name': error.error_list

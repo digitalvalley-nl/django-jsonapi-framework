@@ -66,18 +66,14 @@ class JSONAPIModelResource:
         cls.__validate_request_headers(request)
         data = cls.__parse_request_body(request, 'create')
         model_data = cls.__parse_model_data(data['data'])
-        print(model_data['type'])
-        print(cls.model.__name__)
         if model_data['type'] != cls.model.__name__:
             raise ModelTypeInvalidError()
-
         # Create the model
         model = cls.model()
         create_profile = cls.create_profile.resolve(None)
         cls.populate_model_from_resource(model, model_data, create_profile)
-        is_valid = cls.__validate_model(model)
-        if is_valid != False:
-            model.save()
+        cls.__validate_model(model)
+        model.save()
 
         # Return the model data
         if create_profile.show_response:
@@ -146,8 +142,7 @@ class JSONAPIModelResource:
         update_profile = cls.update_profile.resolve(None)
         cls.populate_model_from_resource(model, model_data, update_profile)
         is_valid = cls.__validate_model(model)
-        if is_valid != False:
-            model.save()
+        model.save()
 
         # Return the model data
         if update_profile.show_response:

@@ -1,6 +1,11 @@
 # Django JSON:API Framework
 from django_jsonapi_framework.views import JSONAPIModelResource
-from django_jsonapi_framework.auth.models import Organization, User, UserPassword
+from django_jsonapi_framework.auth.models import (
+    Organization,
+    User,
+    UserEmailConfirmation,
+    UserPasswordChange
+)
 from django_jsonapi_framework.auth.permissions import (
     HasAll,
     HasAny,
@@ -105,7 +110,7 @@ class UserResource(JSONAPIModelResource):
                 )
             )
         ),
-        attributes=['email'],
+        attributes=['email', 'is_email_confirmed'],
         relationships={
             'organization': OrganizationResource
         }
@@ -129,10 +134,21 @@ class UserResource(JSONAPIModelResource):
         )
     )
 
+class UserEmailConfirmationResource(JSONAPIModelResource):
+    basename = 'users/email-confirmation'
+    model = UserEmailConfirmation
+    update_profile = Profile(
+        attributes=['token'],
+        attribute_mappings={
+            'token': 'raw_token'
+        },
+        show_response=False
+    )
 
-class UserPasswordResource(JSONAPIModelResource):
-    basename = 'users/passwords'
-    model = UserPassword
+
+class UserPasswordChangeResource(JSONAPIModelResource):
+    basename = 'users/password-change'
+    model = UserPasswordChange
     create_profile = Profile(
         condition=HasAll(
             IsEqualToOwn('user_id', 'id'),

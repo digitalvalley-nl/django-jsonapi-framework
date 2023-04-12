@@ -1,5 +1,5 @@
 # Django
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils.text import camel_case_to_spaces
 
 
@@ -12,6 +12,8 @@ class ErrorMiddleware:
 
     def process_exception(self, request, exception):
         if isinstance(exception, JSONAPIError):
+            if isinstance(exception, NoContentError):
+                return HttpResponse(status=exception.status)
             class_name = camel_case_to_spaces(
                 exception.__class__.__name__).replace(' ', '_')
             error_data = {
@@ -35,8 +37,13 @@ class JSONAPIError(Exception):
 class BadRequestError(JSONAPIError):
     status = 400
 
+
 class NotFoundError(JSONAPIError):
     status = 404
+
+
+class NoContentError(JSONAPIError):
+    status = 204
 
 
 class ModelAttributeInvalidError(BadRequestError):
