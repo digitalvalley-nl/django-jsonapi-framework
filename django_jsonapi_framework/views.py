@@ -12,9 +12,11 @@ from django.db.models.fields import Field
 
 # Django JSON:API Framework
 from django_jsonapi_framework.exceptions import (
+    ModelAttributeNotAllowedError,
     ModelAttributeRequiredError,
     ModelAttributeTooLongError,
     ModelAttributeTooShortError,
+    ModelRelationshipNotAllowedError,
     ModelIdDoesNotMatchError,
     ModelNotFoundError,
     ModelTypeInvalidError,
@@ -26,6 +28,7 @@ from django_jsonapi_framework.exceptions import (
 )
 from django_jsonapi_framework.utils import (
     camel_case_to_snake_case,
+    get_class_by_fully_qualified_name,
     snake_case_to_camel_case
 )
 
@@ -63,20 +66,22 @@ class JSONAPIModelResource:
         cls.__validate_request_headers(request)
         data = cls.__parse_request_body(request, 'create')
         model_data = cls.__parse_model_data(data['data'])
+        print(model_data['type'])
+        print(cls.model.__name__)
         if model_data['type'] != cls.model.__name__:
             raise ModelTypeInvalidError()
 
         # Create the model
         model = cls.model()
-        create_profile = self.create_profile.resolve(None)
-        cls.populate_model_from_resource(model, data, create_profile)
+        create_profile = cls.create_profile.resolve(None)
+        cls.populate_model_from_resource(model, model_data, create_profile)
         is_valid = cls.__validate_model(model)
         if is_valid != False:
             model.save()
 
         # Return the model data
         if create_profile.show_response:
-            read_profile = self.read_profile.resolve(None)
+            read_profile = cls.read_profile.resolve(None)
             return JsonResponse({
                 'data': cls.render_model_to_resource(model, read_profile)
             })
@@ -253,10 +258,15 @@ class JSONAPIModelResource:
             if relationship_value['data'] is None:
                 setattr(model, relationship_name, None)
             else:
-                relationship_class = \
-                    model._meta.get_field(relationship_name).related_model
-                relationship_instance = relationship_class.objects.get(
-                    id=relationship_value['data']['id'])
+                resource_class = profile.relationships[relationship_name]
+                if isinstance(resource_class, str):
+                    resource_class = get_class_by_fully_qualified_name(
+                        resource_class
+                    )
+                id_field = resource_class.id_field
+                relationship_instance = resource_class.model.objects.get(**{
+                    id_field: relationship_value['data']['id']
+                })
                 setattr(model, relationship_name, relationship_instance)
 
     @classmethod

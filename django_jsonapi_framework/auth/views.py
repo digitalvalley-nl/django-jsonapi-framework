@@ -1,6 +1,6 @@
 # Django JSON:API Framework
 from django_jsonapi_framework.views import JSONAPIModelResource
-from django_jsonapi_framework.auth.models import Organization, User
+from django_jsonapi_framework.auth.models import Organization, User, UserPassword
 from django_jsonapi_framework.auth.permissions import (
     HasAll,
     HasAny,
@@ -33,7 +33,9 @@ class OrganizationResource(JSONAPIModelResource):
             )
         ),
         attributes=['name'],
-        relationships=['owner']
+        relationships={
+            'owner': 'django_jsonapi_framework.auth.views.UserResource'
+        }
     )
     update_profile = Profile(
         condition=HasAny(
@@ -81,7 +83,9 @@ class UserResource(JSONAPIModelResource):
         attribute_mappings={
             'password': 'raw_password'
         },
-        relationships=['organization'],
+        relationships={
+            'organization': OrganizationResource
+        },
         show_response=False
     )
     read_profile = Profile(
@@ -102,7 +106,9 @@ class UserResource(JSONAPIModelResource):
             )
         ),
         attributes=['email'],
-        relationships=['organization']
+        relationships={
+            'organization': OrganizationResource
+        }
     )
     delete_profile = Profile(
         condition=HasAny(
@@ -121,4 +127,22 @@ class UserResource(JSONAPIModelResource):
                 )
             )
         )
+    )
+
+
+class UserPasswordResource(JSONAPIModelResource):
+    basename = 'users/passwords'
+    model = UserPassword
+    create_profile = Profile(
+        condition=HasAll(
+            IsEqualToOwn('user_id', 'id'),
+            HasPermission(
+                'django_jsonapi_framework__auth.user_passwords.create_self'
+            )
+        ),
+        attributes=['current_password', 'new_password'],
+        relationships={
+            'user': UserResource
+        },
+        show_response=False
     )

@@ -8,9 +8,14 @@ def camel_case_to_snake_case(value):
     return CAMEL_CASE_TO_SNAKE_CASE_REGEX.sub('_', value).lower()
 
 
-def snake_case_to_camel_case(value):
-    components = value.split('_')
-    return components[0] + ''.join(x.title() for x in components[1:])
+def clean_field(self, field_name, field, value):
+    try:
+        field.clean(value, self)
+    except ValidationError as error:
+        error.error_dict = {
+            'field_name': error.error_list
+        }
+        raise error
 
 
 def get_class_by_fully_qualified_name(fully_qualified_name):
@@ -22,11 +27,6 @@ def get_class_by_fully_qualified_name(fully_qualified_name):
     return module
 
 
-def clean_field(self, field_name, field, value):
-    try:
-        field.clean(value, self)
-    except ValidationError as error:
-        error.error_dict = {
-            'field_name': error.error_list
-        }
-        raise error
+def snake_case_to_camel_case(value):
+    components = value.split('_')
+    return components[0] + ''.join(x.title() for x in components[1:])

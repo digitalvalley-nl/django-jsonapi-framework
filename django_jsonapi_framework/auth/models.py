@@ -5,9 +5,11 @@ import uuid
 from django.contrib.auth.models import User as DjangoUser
 from django.core.validators import MinLengthValidator
 from django.db.models import (
-    CASCADE,
+    AutoField,
     BooleanField,
+    CASCADE,
     CharField,
+    DO_NOTHING,
     ForeignKey,
     Model,
     SET_NULL,
@@ -16,7 +18,10 @@ from django.db.models import (
 from django.db.utils import IntegrityError
 
 # Django JSON:API Framework
-from django_jsonapi_framework.exceptions import ModelAttributeRequiredError
+from django_jsonapi_framework.exceptions import (
+    ModelAttributeInvalidError,
+    ModelAttributeRequiredError
+)
 from django_jsonapi_framework.utils import (
     get_class_by_fully_qualified_name,
     clean_field
@@ -146,3 +151,44 @@ class User(ModelSignalsTransceiver, DjangoUser):
             'post_save',
             'post_save_error'
         ]
+
+
+class UserPassword(Model):
+    id = AutoField(primary_key=True)
+    current_password = CharField(
+        blank=False,
+        null=False,
+        default=None,
+        max_length=128,
+        validators=[
+            MinLengthValidator(8)
+        ]
+    )
+    new_password = CharField(
+        blank=False,
+        null=False,
+        default=None,
+        max_length=128,
+        validators=[
+            MinLengthValidator(8)
+        ]
+    )
+    user = ForeignKey(
+        to=User,
+        on_delete=DO_NOTHING,
+        blank=False,
+        null=False,
+        default=None,
+        related_name='+'
+    )
+
+    def save(self):
+        if not self.user.check_password(self.current_password):
+            raise ModelAttributeInvalidError({
+                'field': 'current_password'
+            })
+        self.user.set_password(self.new_password)
+        self.user.save()
+
+    class Meta:
+        managed = False
