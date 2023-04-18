@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxLengthValidator, MinLengthValidator
 from django.http import HttpResponse, JsonResponse
 from django.urls import path
+from django.db import transaction
 from django.db.models.fields import Field
 
 # Django JSON:API Framework
@@ -36,10 +37,9 @@ from django_jsonapi_framework.utils import (
 import jsonschema
 
 
-class JSONAPIModelResource:
+class JSONAPIResource:
     basename = None
     model = None
-    id_field = 'id'
     create_profile = None
     read_profile = None
     update_profile = None
@@ -72,8 +72,9 @@ class JSONAPIModelResource:
         model = cls.model()
         create_profile = cls.create_profile.resolve(None)
         cls.populate_model_from_resource(model, model_data, create_profile)
-        cls.__validate_model(model)
-        model.save()
+        with transaction.atomic():
+            cls.__validate_model(model)
+            model.save()
 
         # Return the model data
         if create_profile.show_response:
@@ -141,8 +142,9 @@ class JSONAPIModelResource:
         model = cls.__get_model(id)
         update_profile = cls.update_profile.resolve(None)
         cls.populate_model_from_resource(model, model_data, update_profile)
-        is_valid = cls.__validate_model(model)
-        model.save()
+        with transaction.atomic():
+            cls.__validate_model(model)
+            model.save()
 
         # Return the model data
         if update_profile.show_response:
@@ -156,13 +158,7 @@ class JSONAPIModelResource:
     @classmethod
     def __get_model(cls, id):
         try:
-            id_field = 'id'
-            if hasattr(cls, 'id_field'):
-                id_field = cls.id_field
-            kwargs = {
-                id_field: id
-            }
-            model = cls.model.objects.get(**kwargs)
+            model = cls.model.objects.get(id=id)
         except cls.model.DoesNotExist:
             raise ModelNotFoundError()
         return model
@@ -209,6 +205,8 @@ class JSONAPIModelResource:
             field_name = next(iter(error.error_dict))
             field_error = error.error_dict[field_name][0]
 
+            print(error.error_dict)
+
             # Convert the error to a bad request error if recognized
             if field_error.code in VALIDATION_ERRORS:
                 meta = {
@@ -226,6 +224,7 @@ class JSONAPIModelResource:
                 elif field_error.code == 'unique_together':
                     del meta['field']
                     meta['fields'] = field_error.params['unique_check']
+                print(meta)
                 error = VALIDATION_ERRORS[field_error.code](meta=meta)
 
             raise error
@@ -258,10 +257,9 @@ class JSONAPIModelResource:
                     resource_class = get_class_by_fully_qualified_name(
                         resource_class
                     )
-                id_field = resource_class.id_field
-                relationship_instance = resource_class.model.objects.get(**{
-                    id_field: relationship_value['data']['id']
-                })
+                relationship_instance = resource_class.model.objects.get(
+                    id=relationship_value['data']['id']
+                )
                 setattr(model, relationship_name, relationship_instance)
 
     @classmethod
@@ -286,7 +284,7 @@ class JSONAPIModelResource:
             }
 
         resource = {
-            'id': getattr(model, cls.id_field),
+            'id': model.id,
             'type': model.__class__.__name__,
         }
         if len(attributes.keys()) > 0:

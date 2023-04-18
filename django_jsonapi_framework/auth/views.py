@@ -1,5 +1,5 @@
 # Django JSON:API Framework
-from django_jsonapi_framework.views import JSONAPIModelResource
+from django_jsonapi_framework.views import JSONAPIResource
 from django_jsonapi_framework.auth.models import (
     Organization,
     User,
@@ -7,34 +7,32 @@ from django_jsonapi_framework.auth.models import (
     UserPasswordChange
 )
 from django_jsonapi_framework.auth.permissions import (
-    HasAll,
-    HasAny,
-    HasPermission,
-    IsEqualToOwn,
-    IsOwnOrganization,
+    AllOf,
+    AnyOf,
+    ModelFieldIsEqualToOwnField,
+    UserHasGlobalPermission,
+    UserHasPermissionInOrganizationOfModel,
     Profile
 )
 
 
-class OrganizationResource(JSONAPIModelResource):
+class OrganizationResource(JSONAPIResource):
     basename = 'organizations'
     model = Organization
     create_profile = Profile(
-        condition=HasPermission(
-            'django_jsonapi_framework__auth.organizations.create_all'
-        ),
-        attributes=['name']
+        attributes=['name', 'email', 'password'],
+        attribute_mappings={
+            'password': 'raw_password'
+        },
+        show_response=False
     )
     read_profile = Profile(
-        condition=HasAny(
-            HasPermission(
-                'django_jsonapi_framework__auth.organizations.read_all'
+        condition=AnyOf(
+            UserHasGlobalPermission(
+                'django_jsonapi_framework_auth.organizations.read_all'
             ),
-            HasAll(
-                IsEqualToOwn('id', 'organization_id'),
-                HasPermission(
-                    'django_jsonapi_framework__auth.organizations.read_own'
-                )
+            UserHasPermissionInOrganizationOfModel(
+                'django_jsonapi_framework_auth.organizations.read_own'
             )
         ),
         attributes=['name'],
@@ -43,45 +41,41 @@ class OrganizationResource(JSONAPIModelResource):
         }
     )
     update_profile = Profile(
-        condition=HasAny(
-            HasPermission(
-                'django_jsonapi_framework__auth.organizations.update_all'
+        condition=AnyOf(
+            UserHasGlobalPermission(
+                'django_jsonapi_framework_auth.organizations.update_all'
             ),
-            HasAll(
-                IsEqualToOwn('id', 'organization_id'),
-                HasPermission(
-                    'django_jsonapi_framework__auth.organizations.update_own'
-                )
+            UserHasPermissionInOrganizationOfModel(
+                'django_jsonapi_framework_auth.organizations.update_own'
             )
         ),
         attributes=['name']
     )
     delete_profile = Profile(
-        condition=HasAny(
-            HasPermission(
-                'django_jsonapi_framework__auth.organizations.delete_all'
+        condition=AnyOf(
+            UserHasGlobalPermission(
+                'django_jsonapi_framework_auth.organizations.delete_all'
             ),
-            HasAll(
-                IsEqualToOwn('id', 'organization_id'),
-                HasPermission(
-                    'django_jsonapi_framework__auth.organizations.delete_own'
-                )
+            UserHasPermissionInOrganizationOfModel(
+                'django_jsonapi_framework_auth.organizations.delete_own'
             )
         )
     )
 
 
-class UserResource(JSONAPIModelResource):
+class UserResource(JSONAPIResource):
     basename = 'users'
     model = User
-    id_field = 'uuid'
     create_profile = Profile(
-        condition=HasAny(
-            HasPermission(
-                'django_jsonapi_framework__auth.users.create_all'
+        condition=AnyOf(
+            UserHasGlobalPermission(
+                'django_jsonapi_framework_auth.users.create_all'
             ),
-            HasPermission(
-                'django_jsonapi_framework__auth.users.create_own'
+            AllOf(
+                ModelFieldIsEqualToOwnField('id', 'id'),
+                UserHasGlobalPermission(
+                    'django_jsonapi_framework_auth.users.create_own'
+                )
             )
         ),
         attributes=['email', 'password'],
@@ -94,21 +88,20 @@ class UserResource(JSONAPIModelResource):
         show_response=False
     )
     read_profile = Profile(
-        condition=HasAny(
-            HasPermission(
-                'django_jsonapi_framework__auth.users.read_all'
+        condition=AnyOf(
+            UserHasGlobalPermission(
+                'django_jsonapi_framework_auth.users.read_all'
             ),
-            HasAll(
-                IsOwnOrganization(),
-                HasAny(
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.read_own'
-                    ),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.read_self'
-                    )
+            UserHasPermissionInOrganizationOfModel(
+                'django_jsonapi_framework_auth.users.read_own'
+            ),
+            AllOf(
+                ModelFieldIsEqualToOwnField('id', 'id'),
+                UserHasPermissionInOrganizationOfModel(
+                    'django_jsonapi_framework_auth.users.read_self'
                 )
             )
+
         ),
         attributes=['email', 'is_email_confirmed'],
         relationships={
@@ -116,27 +109,32 @@ class UserResource(JSONAPIModelResource):
         }
     )
     delete_profile = Profile(
-        condition=HasAny(
-            HasPermission(
-                'django_jsonapi_framework__auth.users.delete_all'
+        condition=AnyOf(
+            UserHasGlobalPermission(
+                'django_jsonapi_framework_auth.users.delete_all'
             ),
-            HasAll(
-                IsOwnOrganization(),
-                HasAny(
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.delete_own'
-                    ),
-                    HasPermission(
-                        'django_jsonapi_framework__auth.users.delete_self'
-                    )
+            UserHasPermissionInOrganizationOfModel(
+                'django_jsonapi_framework_auth.users.delete_own'
+            ),
+            AllOf(
+                ModelFieldIsEqualToOwnField('id', 'id'),
+                UserHasPermissionInOrganizationOfModel(
+                    'django_jsonapi_framework_auth.users.delete_self'
                 )
             )
         )
     )
 
-class UserEmailConfirmationResource(JSONAPIModelResource):
+class UserEmailConfirmationResource(JSONAPIResource):
     basename = 'users/email-confirmation'
     model = UserEmailConfirmation
+
+    create_profile = Profile(
+        relationships={
+            'user': UserResource
+        },
+        show_response=False
+    )
     update_profile = Profile(
         attributes=['token'],
         attribute_mappings={
@@ -146,14 +144,14 @@ class UserEmailConfirmationResource(JSONAPIModelResource):
     )
 
 
-class UserPasswordChangeResource(JSONAPIModelResource):
+class UserPasswordChangeResource(JSONAPIResource):
     basename = 'users/password-change'
     model = UserPasswordChange
     create_profile = Profile(
-        condition=HasAll(
-            IsEqualToOwn('user_id', 'id'),
-            HasPermission(
-                'django_jsonapi_framework__auth.user_passwords.create_self'
+        condition=AllOf(
+            ModelFieldIsEqualToOwnField('user_id', 'id'),
+            UserHasPermissionInOrganizationOfModel(
+                'django_jsonapi_framework_auth.user_passwords.create_self'
             )
         ),
         attributes=['current_password', 'new_password'],

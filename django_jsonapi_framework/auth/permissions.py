@@ -2,11 +2,11 @@
 from django.db.models import Q
 
 
-class HasAll:
+class AllOf:
     def __init__(self, *conditions):
         self.__conditions = conditions
         if len(conditions) < 2:
-            raise ValueError('HasAll requires at least 2 conditions')
+            raise ValueError('AllOf requires at least 2 conditions')
 
     def check_model(self, model, user):
         for condition in self.__conditions:
@@ -21,11 +21,11 @@ class HasAll:
         return filter
 
 
-class HasAny:
+class AnyOf:
     def __init__(self, *conditions):
         self.__conditions = conditions
         if len(conditions) < 2:
-            raise ValueError('HasAny requires at least 2 conditions')
+            raise ValueError('AnyOf requires at least 2 conditions')
 
     def check_model(self, model, user):
         for condition in self.__conditions:
@@ -40,29 +40,9 @@ class HasAny:
         return filter
 
 
-class IsEqual:
-    def __init__(self, field, value):
-        self.__field = field
-        self.__value = value
-
-    def check_model(self, model, user):
-        value = getattr(model, self.__field)
-        if value == self.__value:
-            return True
-        return False
-
-    def check_queryset(self, queryset, user):
-        kwargs = {
-            self.__field: self.__value
-        }
-        return Q(**kwargs)
-
-
-class IsEqualToOwn:
+class ModelFieldIsEqualToOwnField:
     def __init__(self, field, own_field):
         self.__field = field
-        if own_field == 'id':
-            own_field = 'uuid'
         self.__own_field = own_field
 
     def check_model(self, model, user):
@@ -82,12 +62,25 @@ class IsEqualToOwn:
         return Q(**kwargs)
 
 
-class IsOwnOrganization(IsEqualToOwn):
-    def __init__(self):
-        super().__init__('organization_id', 'organization_id')
+class ModelFieldIsEqualToValue:
+    def __init__(self, field, value):
+        self.__field = field
+        self.__value = value
+
+    def check_model(self, model, user):
+        value = getattr(model, self.__field)
+        if value == self.__value:
+            return True
+        return False
+
+    def check_queryset(self, queryset, user):
+        kwargs = {
+            self.__field: self.__value
+        }
+        return Q(**kwargs)
 
 
-class IsNone:
+class ModelFieldIsNone:
     def __init__(self, field):
         self.__field = field
 
@@ -104,7 +97,7 @@ class IsNone:
         return Q(**kwargs)
 
 
-class IsNotNone:
+class ModelFieldIsNotNone:
     def __init__(self, field):
         self.__field = field
 
@@ -121,7 +114,22 @@ class IsNotNone:
         return Q(**kwargs)
 
 
-class HasPermission:
+class UserHasGlobalPermission:
+    def __init__(self, key):
+        self.__key = key
+
+    def check_model(self, model, user):
+        if user is not None and user.has_permission(self.__key):
+            return True
+        return False
+
+    def check_queryset(self, queryset, user):
+        if user.has_permission(self.__key):
+            return ~Q(pk__in=[])
+        return Q(pk__in=[])
+
+
+class UserHasPermissionInOrganizationOfModel:
     def __init__(self, key):
         self.__key = key
 
@@ -144,7 +152,6 @@ class Profile:
         attributes=None,
         attribute_mappings=None,
         relationships=None,
-        restrictions=None,
         show_response=True
     ):
         self.__condition = condition
@@ -152,7 +159,6 @@ class Profile:
         self.attribute_mappings = \
             attribute_mappings if attribute_mappings is not None else {}
         self.relationships = relationships if relationships is not None else {}
-        self.__restrictions = restrictions
         self.show_response = show_response
 
     def resolve(self, user):

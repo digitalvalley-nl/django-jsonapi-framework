@@ -2,7 +2,7 @@ from django.conf import settings as django_settings
 
 
 DEFAULTS = {
-    'AUTH_EMAIL_HANDLER': None
+    'AUTH_EMAIL_BACKEND': None
 }
 
 
