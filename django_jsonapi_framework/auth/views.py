@@ -1,162 +1,57 @@
-# Django JSON:API Framework
-from django_jsonapi_framework.views import JSONAPIResource
+# Django JSON:API Framework - Core
+from django_jsonapi_framework.views import (
+    JSONAPIResource,
+    JSONAPIResourceProfile
+)
+
+# Django JSON:API Framework - Auth
 from django_jsonapi_framework.auth.models import (
     Organization,
-    User,
-    UserEmailConfirmation,
-    UserPasswordChange
-)
-from django_jsonapi_framework.auth.permissions import (
-    AllOf,
-    AnyOf,
-    ModelFieldIsEqualToOwnField,
-    UserHasGlobalPermission,
-    UserHasPermissionInOrganizationOfModel,
-    Profile
+    UserEmailConfirmation
 )
 
+"""Class used to configure the behaviour of the request methods of a
+JSON:API resource in relation to the currently authenticated user.
+"""
+class AuthProfile(JSONAPIResourceProfile):
+    def __init__(
+        self,
+        attributes=None,
+        attribute_mappings=None,
+        relationships=None,
+        show_response=True,
+        condition=None
+    ):
+        """Initialized the profile."""
+        super().__init__(
+            attributes=attributes,
+            attribute_mappings=attribute_mappings,
+            relationships=relationships,
+            show_response=show_response
+        )
+        self.__condition = condition
 
+
+"""Class used to configure an organization resource."""
 class OrganizationResource(JSONAPIResource):
     basename = 'organizations'
     model = Organization
-    create_profile = Profile(
-        attributes=['name', 'email', 'password'],
+    create_profile = JSONAPIResourceProfile(
+        attributes=['name', 'owner_email', 'owner_password'],
         attribute_mappings={
-            'password': 'raw_password'
+            'owner_password': 'owner_raw_password'
         },
         show_response=False
     )
-    read_profile = Profile(
-        condition=AnyOf(
-            UserHasGlobalPermission(
-                'django_jsonapi_framework_auth.organizations.read_all'
-            ),
-            UserHasPermissionInOrganizationOfModel(
-                'django_jsonapi_framework_auth.organizations.read_own'
-            )
-        ),
-        attributes=['name'],
-        relationships={
-            'owner': 'django_jsonapi_framework.auth.views.UserResource'
-        }
-    )
-    update_profile = Profile(
-        condition=AnyOf(
-            UserHasGlobalPermission(
-                'django_jsonapi_framework_auth.organizations.update_all'
-            ),
-            UserHasPermissionInOrganizationOfModel(
-                'django_jsonapi_framework_auth.organizations.update_own'
-            )
-        ),
-        attributes=['name']
-    )
-    delete_profile = Profile(
-        condition=AnyOf(
-            UserHasGlobalPermission(
-                'django_jsonapi_framework_auth.organizations.delete_all'
-            ),
-            UserHasPermissionInOrganizationOfModel(
-                'django_jsonapi_framework_auth.organizations.delete_own'
-            )
-        )
-    )
 
-
-class UserResource(JSONAPIResource):
-    basename = 'users'
-    model = User
-    create_profile = Profile(
-        condition=AnyOf(
-            UserHasGlobalPermission(
-                'django_jsonapi_framework_auth.users.create_all'
-            ),
-            AllOf(
-                ModelFieldIsEqualToOwnField('id', 'id'),
-                UserHasGlobalPermission(
-                    'django_jsonapi_framework_auth.users.create_own'
-                )
-            )
-        ),
-        attributes=['email', 'password'],
-        attribute_mappings={
-            'password': 'raw_password'
-        },
-        relationships={
-            'organization': OrganizationResource
-        },
-        show_response=False
-    )
-    read_profile = Profile(
-        condition=AnyOf(
-            UserHasGlobalPermission(
-                'django_jsonapi_framework_auth.users.read_all'
-            ),
-            UserHasPermissionInOrganizationOfModel(
-                'django_jsonapi_framework_auth.users.read_own'
-            ),
-            AllOf(
-                ModelFieldIsEqualToOwnField('id', 'id'),
-                UserHasPermissionInOrganizationOfModel(
-                    'django_jsonapi_framework_auth.users.read_self'
-                )
-            )
-
-        ),
-        attributes=['email', 'is_email_confirmed'],
-        relationships={
-            'organization': OrganizationResource
-        }
-    )
-    delete_profile = Profile(
-        condition=AnyOf(
-            UserHasGlobalPermission(
-                'django_jsonapi_framework_auth.users.delete_all'
-            ),
-            UserHasPermissionInOrganizationOfModel(
-                'django_jsonapi_framework_auth.users.delete_own'
-            ),
-            AllOf(
-                ModelFieldIsEqualToOwnField('id', 'id'),
-                UserHasPermissionInOrganizationOfModel(
-                    'django_jsonapi_framework_auth.users.delete_self'
-                )
-            )
-        )
-    )
-
+"""Class used to configure a user email confirmation resource."""
 class UserEmailConfirmationResource(JSONAPIResource):
-    basename = 'users/email-confirmation'
+    basename = 'users/email-confirmations'
     model = UserEmailConfirmation
-
-    create_profile = Profile(
-        relationships={
-            'user': UserResource
-        },
-        show_response=False
-    )
-    update_profile = Profile(
+    update_profile = JSONAPIResourceProfile(
         attributes=['token'],
         attribute_mappings={
             'token': 'raw_token'
-        },
-        show_response=False
-    )
-
-
-class UserPasswordChangeResource(JSONAPIResource):
-    basename = 'users/password-change'
-    model = UserPasswordChange
-    create_profile = Profile(
-        condition=AllOf(
-            ModelFieldIsEqualToOwnField('user_id', 'id'),
-            UserHasPermissionInOrganizationOfModel(
-                'django_jsonapi_framework_auth.user_passwords.create_self'
-            )
-        ),
-        attributes=['current_password', 'new_password'],
-        relationships={
-            'user': UserResource
         },
         show_response=False
     )

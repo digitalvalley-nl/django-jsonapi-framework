@@ -11,7 +11,7 @@ from django.urls import path
 from django.db import transaction
 from django.db.models.fields import Field
 
-# Django JSON:API Framework
+# Django JSON:API Framework - Core
 from django_jsonapi_framework.exceptions import (
     ModelAttributeNotAllowedError,
     ModelAttributeRequiredError,
@@ -19,13 +19,14 @@ from django_jsonapi_framework.exceptions import (
     ModelAttributeTooShortError,
     ModelRelationshipNotAllowedError,
     ModelIdDoesNotMatchError,
+    ModelIdRequiredError,
     ModelNotFoundError,
     ModelTypeInvalidError,
     RequestBodyJsonDecodeError,
     RequestBodyJsonSchemaError,
+    RequestBodyNotAllowedError,
     RequestHeaderInvalidError,
-    RequestMethodNotAllowedError,
-    VALIDATION_ERRORS
+    RequestMethodNotAllowedError
 )
 from django_jsonapi_framework.utils import (
     camel_case_to_snake_case,
@@ -37,14 +38,28 @@ from django_jsonapi_framework.utils import (
 import jsonschema
 
 
+"""Class that represents a JSON:API resource."""
 class JSONAPIResource:
+
+    """Defines the basename of the resource."""
     basename = None
+
+    """Defines the model that is mapped to the resource."""
     model = None
+
+    """The profile used to configure the create action of the resource."""
     create_profile = None
+
+    """The profile used to configure the read action of the resource."""
     read_profile = None
+
+    """The profile used to configure the update action of the resource."""
     update_profile = None
+
+    """The profile used to configure the delete action of the resource."""
     delete_profile = None
 
+    """Loads the JSON:API Schema in 2 variations: create and update."""
     __schemas = {}
     with open(str(Path(__file__).resolve().parent) + '/schema.json') as file:
         __schemas['update'] = json.loads(file.read())
@@ -53,110 +68,32 @@ class JSONAPIResource:
     del __schemas['create']['definitions']['resource']['properties']['id']
 
     @classmethod
+    def dispatch(cls, request, id=None):
+        """Dispatches an incoming request to the appropriate handler for the
+        REST method."""
+        if request.method == 'GET':
+            if id is None:
+                return cls.__handle_list_request(request)
+            return cls.__handle_get_request(request, id)
+        if request.method == 'POST':
+            return cls.__handle_create_request(request)
+        if request.method == 'PATCH':
+            return cls.__handle_update_request(request, id)
+        if request.method == 'DELETE':
+            return cls.__handle_delete_request(request, id)
+        raise RequestMethodNotAllowedError()
+
+    @classmethod
     def get_urlpatterns(cls):
+        """Returns the urlpatterns for the resource."""
         return [
             path(cls.basename + '/', cls.dispatch),
             path(cls.basename + '/<id>/', cls.dispatch)
         ]
 
     @classmethod
-    def __create(cls, request):
-
-        # Parse the request
-        cls.__validate_request_headers(request)
-        data = cls.__parse_request_body(request, 'create')
-        model_data = cls.__parse_model_data(data['data'])
-        if model_data['type'] != cls.model.__name__:
-            raise ModelTypeInvalidError()
-        # Create the model
-        model = cls.model()
-        create_profile = cls.create_profile.resolve(None)
-        cls.populate_model_from_resource(model, model_data, create_profile)
-        with transaction.atomic():
-            cls.__validate_model(model)
-            model.save()
-
-        # Return the model data
-        if create_profile.show_response:
-            read_profile = cls.read_profile.resolve(None)
-            return JsonResponse({
-                'data': cls.render_model_to_resource(model, read_profile)
-            })
-        else:
-            return HttpResponse(status=204)
-
-    @classmethod
-    def __delete(cls, request, id):
-        model = cls.__get_model(id)
-        model.delete()
-        return HttpResponse(status=204)
-
-    @classmethod
-    def dispatch(cls, request, id=None):
-        if request.method == 'GET':
-            if id is None:
-                return cls.__list(request)
-            return cls.__get(request, id)
-        if request.method == 'POST':
-            return cls.__create(request)
-        if request.method == 'PATCH':
-            return cls.__update(request, id)
-        if request.method == 'DELETE':
-            return cls.__delete(request, id)
-        raise RequestMethodNotAllowedError()
-
-    @classmethod
-    def __get(cls, request, id):
-        model = cls.__get_model(id)
-        read_profile = cls.read_profile.resolve(None)
-        return JsonResponse({
-            'data': cls.render_model_to_resource(model, read_profile)
-        })
-
-    @classmethod
-    def __list(cls, request):
-        models = cls.model.objects.all()
-        read_profile = cls.read_profile.resolve(None)
-        return JsonResponse({
-            'data': list(
-                map(
-                    lambda model: cls.render_model_to_resource(model, read_profile),
-                    models
-                )
-            )
-        })
-
-    @classmethod
-    def __update(cls, request, id):
-
-        # Parse the request
-        cls.__validate_request_headers(request)
-        data = cls.__parse_request_body(request, 'update')
-        model_data = cls.__parse_model_data(data['data'])
-        if model_data['type'] != cls.model.__name__:
-            raise ModelTypeInvalidError()
-        if model_data['id'] != id:
-            raise ModelIdDoesNotMatchError()
-
-        # Create the model
-        model = cls.__get_model(id)
-        update_profile = cls.update_profile.resolve(None)
-        cls.populate_model_from_resource(model, model_data, update_profile)
-        with transaction.atomic():
-            cls.__validate_model(model)
-            model.save()
-
-        # Return the model data
-        if update_profile.show_response:
-            read_profile = cls.read_profile.resolve(None)
-            return JsonResponse({
-                'data': cls.render_model_to_resource(model, read_profile)
-            })
-        else:
-            return HttpResponse(status=204)
-
-    @classmethod
     def __get_model(cls, id):
+        """Retrieves a model from the database by id."""
         try:
             model = cls.model.objects.get(id=id)
         except cls.model.DoesNotExist:
@@ -164,106 +101,183 @@ class JSONAPIResource:
         return model
 
     @classmethod
-    def __validate_request_headers(cls, request):
-        if request.headers['Content-Type'] != 'application/vnd.api+json':
-            raise RequestHeaderInvalidError({
-                'key': 'Content-Type',
-                'value': request.headers['Content-Type']
+    def __handle_create_request(cls, request):
+        """Handles an incoming create request."""
+
+        # Parse and validate the request
+        cls.__validate_request_method('create')
+        cls.__validate_request_headers(request)
+        body = cls.__parse_request_body(request)
+        cls.__validate_request_body(body, cls.create_profile)
+        resource = body['data']
+
+        # Create, populate, validate and save the model
+        model = cls.model()
+        cls.__populate_model_from_resource(
+            model=model,
+            resource=resource,
+            profile=cls.create_profile
+        )
+        with transaction.atomic():
+            model.full_clean()
+            model.save()
+
+        # If configured by the create profile, render the model to a resource
+        # and return it in the response data
+        if cls.create_profile.show_response:
+            return JsonResponse({
+                'data': cls.__render_model_to_resource(
+                    model=model,
+                    profile=cls.read_profile
+                )
             })
 
+        # Otherwise, return an empty response
+        return HttpResponse(status=204)
+
     @classmethod
-    def __parse_request_body(cls, request, schema):
-        # Parse the JSON:API data
+    def __handle_delete_request(cls, request, id):
+        """Handles an incoming delete request."""
+
+        # Parse and validate the request
+        cls.__validate_request_method('delete')
+        cls.__validate_request_headers(request)
+        cls.__validate_request_body_is_empty(request)
+
+        # Get and delete the model
+        model = cls.__get_model(id)
+        model.delete()
+
+        # Return an empty response
+        return HttpResponse(status=204)
+
+    @classmethod
+    def __handle_get_request(cls, request, id):
+        """Handles an incoming get request."""
+
+        # Parse and validate the request
+        cls.__validate_request_method('read')
+        cls.__validate_request_headers(request)
+        cls.__validate_request_body_is_empty(request)
+
+        # Get the model
+        model = cls.__get_model(id)
+
+        # Render the model to a resource and return it in the response data
+        return JsonResponse({
+            'data': cls.__render_model_to_resource(
+                model=model,
+                profile=cls.read_profile
+            )
+        })
+
+    @classmethod
+    def __handle_list_request(cls, request):
+        """Handles an incoming list request."""
+
+        # Parse and validate the request
+        cls.__validate_request_method('read')
+        cls.__validate_request_headers(request)
+        cls.__validate_request_body_is_empty(request)
+
+        # List the models
+        models = cls.model.objects.all()
+
+        # TODO: Support filter options
+
+        # Render the models to a list of resources and return it in the
+        # response data
+        return JsonResponse({
+            'data': list(
+                map(
+                    lambda model: cls.__render_model_to_resource(
+                        model=model,
+                        profile=read_profile
+                    ),
+                    models
+                )
+            )
+        })
+
+    @classmethod
+    def __handle_update_request(cls, request, id):
+        """Handles an incoming update request."""
+
+        # Parse and validate the request
+        cls.__validate_request_method('update')
+        cls.__validate_request_headers(request)
+        body = cls.__parse_request_body(request)
+        cls.__validate_request_body(body, cls.update_profile, id)
+        resource = body['data']
+
+        # Get, populate, validate and save the model
+        model = cls.__get_model(id)
+        update_profile = cls.update_profile
+        cls.__populate_model_from_resource(
+            model=model,
+            resource=resource,
+            profile=cls.update_profile
+        )
+        with transaction.atomic():
+            model.full_clean()
+            model.save()
+
+        # If configured by the update profile, render the model to a resource
+        # and return it in the response data
+        if cls.update_profile.show_response:
+            return JsonResponse({
+                'data': cls.__render_model_to_resource(
+                    model=model,
+                    profile=cls.read_profile
+                )
+            })
+
+        # Otherwise, return an empty response
+        return HttpResponse(status=204)
+
+    @classmethod
+    def __parse_request_body(cls, request):
+        """Parses the request body json."""
         try:
-            data = json.loads(request.body.decode('utf-8'))
+            body = json.loads(request.body.decode('utf-8'))
         except json.JSONDecodeError:
             raise RequestBodyJsonDecodeError() # TODO: Give more error details
-
-        # Validate the JSON:API data
-        try:
-            jsonschema.validate(instance=data, schema=cls.__schemas[schema])
-        except jsonschema.exceptions.ValidationError:
-            raise RequestBodyJsonSchemaError() # TODO: Give more error details
-
-        return data
+        return body
 
     @classmethod
-    def __parse_model_data(cls, model_data):
-        if 'attributes' not in model_data:
-            model_data['attributes'] = {}
-        if 'relationships' not in model_data:
-            model_data['relationships'] = {}
-        return model_data
+    def __populate_model_from_resource(cls, model, resource, profile):
+        """Populates a model from a JSON:API resource using a profile."""
 
-    @classmethod
-    def __validate_model(cls, model):
-        try:
-            return model.full_clean()
-        except ValidationError as error:
+        # Populate the attributes
+        if 'attributes' in resource:
+            for attribute_name, attribute_value in resource['attributes'].items():
+                attribute_name = camel_case_to_snake_case(attribute_name)
+                if attribute_name in profile.attribute_mappings:
+                    attribute_name = profile.attribute_mappings[attribute_name]
+                setattr(model, attribute_name, attribute_value)
 
-            # Get the field name and error
-            field_name = next(iter(error.error_dict))
-            field_error = error.error_dict[field_name][0]
-
-            print(error.error_dict)
-
-            # Convert the error to a bad request error if recognized
-            if field_error.code in VALIDATION_ERRORS:
-                meta = {
-                    'field': field_name
-                }
-                if field_error.code == 'blank':
-                    meta['min_length'] = 1
-                    for validator in model._meta.get_field(field_name).validators:
-                        if isinstance(validator, MinLengthValidator):
-                            meta['min_length'] = validator.limit_value
-                elif field_error.code == 'min_length':
-                    meta['min_length'] = field_error.params['limit_value']
-                elif field_error.code == 'max_length':
-                    meta['max_length'] = field_error.params['limit_value']
-                elif field_error.code == 'unique_together':
-                    del meta['field']
-                    meta['fields'] = field_error.params['unique_check']
-                print(meta)
-                error = VALIDATION_ERRORS[field_error.code](meta=meta)
-
-            raise error
-
-
-    @classmethod
-    def populate_model_from_resource(cls, model, resource, profile):
-        for attribute_name, attribute_value in resource['attributes'].items():
-            attribute_name = camel_case_to_snake_case(attribute_name)
-            if attribute_name not in profile.attributes:
-                raise ModelAttributeNotAllowedError({
-                    'key': attribute_name
-                })
-            if attribute_name in profile.attribute_mappings:
-                attribute_name = profile.attribute_mappings[attribute_name]
-            setattr(model, attribute_name, attribute_value)
-
-        for relationship_name, relationship_value \
-                in resource['relationships'].items():
-            relationship_name = camel_case_to_snake_case(relationship_name)
-            if relationship_name not in profile.relationships:
-                raise ModelRelationshipNotAllowedError({
-                    'key': relationship_name
-                })
-            if relationship_value['data'] is None:
-                setattr(model, relationship_name, None)
-            else:
-                resource_class = profile.relationships[relationship_name]
-                if isinstance(resource_class, str):
-                    resource_class = get_class_by_fully_qualified_name(
-                        resource_class
+        # Populate the relationships
+        if 'relationships' in resource:
+            for relationship_name, relationship_value \
+                    in resource['relationships'].items():
+                relationship_name = camel_case_to_snake_case(relationship_name)
+                if relationship_value['data'] is None:
+                    setattr(model, relationship_name, None)
+                else:
+                    resource_class = profile.relationships[relationship_name]
+                    if isinstance(resource_class, str):
+                        resource_class = get_class_by_fully_qualified_name(
+                            resource_class
+                        )
+                    relationship_instance = resource_class.model.objects.get(
+                        id=relationship_value['data']['id']
                     )
-                relationship_instance = resource_class.model.objects.get(
-                    id=relationship_value['data']['id']
-                )
-                setattr(model, relationship_name, relationship_instance)
+                    setattr(model, relationship_name, relationship_instance)
 
     @classmethod
-    def render_model_to_resource(cls, model, profile):
+    def __render_model_to_resource(cls, model, profile):
+        """Renders a model to a JSON:API resource using a profile."""
+
         attributes = {}
         for attribute_name in profile.attributes:
             attributes[snake_case_to_camel_case(attribute_name)] = getattr(
@@ -293,3 +307,90 @@ class JSONAPIResource:
             resource['relationships'] = relationships
 
         return resource
+
+    @classmethod
+    def __validate_request_body(cls, body, profile, id=None):
+        """Validates the request body."""
+
+        # Validate the body against the JSON:API schema
+        if id is None:
+            schema = cls.__schemas['create']
+        else:
+            schema = cls.__schemas['update']
+        try:
+            jsonschema.validate(instance=body, schema=schema)
+        except jsonschema.exceptions.ValidationError:
+            raise RequestBodyJsonSchemaError() # TODO: Give more error details
+
+        # Validate the resource type
+        resource = body['data']
+        if resource['type'] != cls.model.__name__:
+            raise ModelTypeInvalidError()
+
+        # Validate the resource id
+        if id is not None:
+            if 'id' not in resource:
+                ModelIdRequiredError()
+            if resource['id'] != id:
+                raise ModelIdDoesNotMatchError()
+
+        # Validate the resource attributes
+        if 'attributes' in resource:
+            for attribute_name, attribute_value \
+                    in resource['attributes'].items():
+                attribute_name = camel_case_to_snake_case(attribute_name)
+                if attribute_name not in profile.attributes:
+                    raise ModelAttributeNotAllowedError({
+                        'key': attribute_name
+                    })
+
+        # Validate the resource relationships
+        if 'relationships' in resource:
+            for relationship_name, relationship_value \
+                    in resource['relationships'].items():
+                relationship_name = camel_case_to_snake_case(relationship_name)
+                if relationship_name not in profile.relationships:
+                    raise ModelRelationshipNotAllowedError({
+                        'key': relationship_name
+                    })
+
+    @classmethod
+    def __validate_request_body_is_empty(cls, request):
+        """Validates to make sure the request body is empty."""
+        if len(request.body) > 0:
+            raise RequestBodyNotAllowedError()
+
+    @classmethod
+    def __validate_request_headers(cls, request):
+        """Validates to request headers."""
+        if len(request.body) > 0 \
+                and request.headers['Content-Type'] != 'application/vnd.api+json':
+            raise RequestHeaderInvalidError({
+                'key': 'Content-Type',
+                'value': request.headers['Content-Type']
+            })
+
+    @classmethod
+    def __validate_request_method(cls, action):
+        """Validates to request method is allowed."""
+        if getattr(cls, action + '_profile') is None:
+            raise RequestMethodNotAllowedError()
+
+
+"""Class used to configure the behaviour of the request methods of a
+JSON:API resource.
+"""
+class JSONAPIResourceProfile:
+    def __init__(
+        self,
+        attributes=None,
+        attribute_mappings=None,
+        relationships=None,
+        show_response=True
+    ):
+        """Initialized the profile."""
+        self.attributes = attributes if attributes is not None else []
+        self.attribute_mappings = \
+            attribute_mappings if attribute_mappings is not None else {}
+        self.relationships = relationships if relationships is not None else {}
+        self.show_response = show_response
