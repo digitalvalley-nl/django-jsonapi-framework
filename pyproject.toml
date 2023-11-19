@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "django-jsonapi-framework"
-version = "0.0.4"
+version = "0.0.5"
 authors = [
   { name="Digital Valley", email="techteam@digitalvalley.nl" }
 ]
